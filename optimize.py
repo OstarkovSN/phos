@@ -8,6 +8,8 @@ from scipy.optimize import curve_fit
 from sklearn.metrics import r2_score
 import plotly.graph_objects as go
 import plotly.io as pio
+from rich.console import Console
+from rich.table import Table
 
 # Set default image format
 pio.kaleido.scope.default_format = "png"
@@ -82,12 +84,14 @@ def fit_models(
                     ),
                 )
             )
-            p0 = list(config[model_name]["p0"]) if model_name in config else None
+            p0 = config.get(model_name, {}).get("p0", None)
+            if p0 is not None:
+                p0 = [float(p) for p in p0]
 
             maxfev: int = config.get(model_name, {}).get("maxfev", 5000)
 
             popt, _ = curve_fit(
-                model_func, time, intensity, bounds=bounds, maxfev=maxfev
+                model_func, time, intensity, bounds=bounds, maxfev=maxfev, p0=p0
             )
 
             predicted = model_func(time, *popt)
@@ -102,10 +106,10 @@ def fit_models(
                 "model_name": model_name,
                 "param_names": param_names[model_name],
             }
-            logger.info(f"R^2 for {model_name} model: {r2}")
+            logger.info(f"R² for {model_name} model: {r2}")
 
         except Exception as e:
-            logger.error(f"Model fitting failed for {model_name}: {e}")
+            logger.error(f"Model fitting failed for {model_name}: [{type(e)}] {e}")
             results[model_name] = {
                 "params": None,
                 "r2": -np.inf,
@@ -113,6 +117,33 @@ def fit_models(
                 "model_name": model_name,
                 "param_names": param_names[model_name],
             }
+    best_model_score = max(
+        results,
+        key=lambda k: np.round(
+            results[k]["r2"],
+            4,
+        ),
+    )
+    best_models = set(
+        model
+        for model in results
+        if np.allclose(
+            results[model]["r2"], results[best_model_score]["r2"], rtol=0, atol=1e-4
+        )
+    )
+    if logger.isEnabledFor(logging.INFO):
+        console = Console()
+        logger.info("Fitting results:")
+        table = Table(show_lines=True)
+        table.add_column("Model", justify="left")
+        table.add_column("R²", justify="left")
+        for model_name, result in results.items():
+            color = "green" if model_name in best_models else "red"
+            table.add_row(
+                f"[{color}]{model_name}[/{color}]",
+                f"[{color}]{result['r2']:.4f}[/{color}]",
+            )
+        console.print(table)
 
     return results
 
@@ -207,9 +238,9 @@ def plot_optimization_results(
                         yanchor="top",
                     ),
                     dict(
-                        x=0.1,
+                        x=0.5,
                         y=0.9,
-                        text=f"R^2: {result['r2']:.4f}",
+                        text=f"$R^{2}: {result['r2']:.4f}$",
                         xref="paper",
                         yref="paper",
                         showarrow=False,
